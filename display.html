@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Leaflet + Open Street Map</title>
+        <!-- Leaflet + d3 libraries -->
+        <script src="https://d19vzq90twjlae.cloudfront.net/leaflet-0.7.3/leaflet.js"></script>
+        <script src="https://d3js.org/d3.v3.min.js" charset="utf-8"></script>
+        <!-- Leaflet CSS -->
+        <link rel="stylesheet" href="https://d19vzq90twjlae.cloudfront.net/leaflet-0.7.3/leaflet.css" />
+        <style>
+            body {
+                margin: 0;
+            }
+            #map-container {
+                height: 100vh;
+                width: 100vw;
+            }
+            div {
+                display: inline-block;
+            }
+            #map-legend {
+                position: absolute;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="map-container"></div><!-- Must have an explicit height attribute! -->
+        <div id="map-legend"></div>
+
+        <script>
+            function projectPoint(x, y) {
+                var point = map.latLngToLayerPoint(new L.LatLng(y, x));
+                this.stream.point(point.x, point.y);
+            }
+
+            var map = new L.Map("map-container", {center: [51.1078852, 17.0385376], zoom: 12})
+                .addLayer(new L.TileLayer("https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png"));
+
+
+            // Add an SVG element to Leaflet’s overlay pane
+            var svg = d3.select(map.getPanes().overlayPane).append("svg"),
+            g = svg.append("g").attr("class", "leaflet-zoom-hide");
+
+            d3.csv("./dane/stations_names.csv", function(error, station_names) {
+                if (error) throw error;
+                
+                let x_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat, d.lng)).x
+                let y_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat, d.lng)).y
+
+                var nodes = g.selectAll("circle")
+                    .data(station_names)
+                    .enter().append("circle")
+                    .style("fill", "#95DACF")
+                    .attr("cx", x_func)
+                    .attr("cy", y_func)
+                    .attr("r", 2);
+
+                d3.csv("./dane/edges.csv", function(error, edge_with_weights) {
+                    //edge_with_weights = edge_with_weights.filter(x => x.weight > 10)
+
+                    console.log(edge_with_weights)
+
+                    let x1_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat_source, d.lng_source)).x
+                    let y1_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat_source, d.lng_source)).y    
+                    let x2_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat_target, d.lng_target)).x
+                    let y2_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat_target, d.lng_target)).y    
+
+                    var edges = g.selectAll("line")
+                        .data(edge_with_weights)
+                        .enter().append("line")
+                        .style("stroke-width",d => 0.3*Math.log(d.weight))
+                        .style("stroke", d => "#E82127" + Math.floor(255*d.weight/1978 + 1).toString(16).padStart(2, "0"))
+                        .attr("x1", x1_func)
+                        .attr("y1", y1_func)
+                        .attr("x2", x2_func)
+                        .attr("y2", y2_func);
+
+                    map.on("viewreset", reset);
+                    reset();
+    
+                    // Reposition the SVG to cover the features.
+                    function reset() {
+                        svg .attr("width", "100vw")
+                            .attr("height", "100vh")
+                            .style("left", 0 + "px")
+                            .style("top", 0 + "px");
+    
+                        //g   .attr("transform", "translate(" + -topLeft[0] + "," + -topLeft[1] + ")");
+    
+                        nodes.attr("cx", x_func).attr("cy", y_func);
+                        edges.attr("x1", x1_func)
+                            .attr("y1", y1_func)
+                            .attr("x2", x2_func)
+                            .attr("y2", y2_func);
+                    }
+    
+                });
+            });
+        </script>
+    </body>
+</html>
