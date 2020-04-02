@@ -5,16 +5,32 @@
         <title>Leaflet + Open Street Map</title>
         <!-- Leaflet + d3 libraries -->
         <script src="https://d19vzq90twjlae.cloudfront.net/leaflet-0.7.3/leaflet.js"></script>
-        <script src="https://d3js.org/d3.v3.min.js" charset="utf-8"></script>
+        <script src="https://d3js.org/d3.v4.min.js" charset="utf-8"></script>
         <!-- Leaflet CSS -->
         <link rel="stylesheet" href="https://d19vzq90twjlae.cloudfront.net/leaflet-0.7.3/leaflet.css" />
+
+        <!-- Jquery -->
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js" integrity="sha256-CSXorXvZcTkaix6Yvo6HppcZGetbYMGWSFlBw8HfCJo=" crossorigin="anonymous"></script>
+
+        <!-- Materialize -->
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+        <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
         <style>
             body {
                 margin: 0;
+                overflow: hidden;
+                width: 100vw;
+                width: 100vh;
+            }
+            .leaflet-control-attribution {
+                display: none;
             }
             #map-container {
                 height: 100vh;
                 width: 100vw;
+                background-color: black;
             }
             div {
                 display: inline-block;
@@ -22,80 +38,183 @@
             #map-legend {
                 position: absolute;
             }
+            .leaflet-tile-pane {
+                opacity: 0;
+            }
         </style>
     </head>
     <body>
         <div id="map-container"></div><!-- Must have an explicit height attribute! -->
         <div id="map-legend"></div>
 
+        <div class="fixed-action-btn">
+            <a class="btn-floating btn-large red">
+              <i class="large material-icons">remove_red_eye</i>
+            </a>
+            <ul>
+              <li><a id="button-map" class="btn-floating green"><i class="material-icons">map</i></a></li>
+              <li><a id="button-force" class="btn-floating blue"><i class="material-icons">grain</i></a></li>
+            </ul>
+          </div>
+
         <script>
-            function projectPoint(x, y) {
-                var point = map.latLngToLayerPoint(new L.LatLng(y, x));
-                this.stream.point(point.x, point.y);
+            function downloadObjectAsJson(exportObj, exportName) {
+                var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObj));
+                var downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.setAttribute("href",     dataStr);
+                downloadAnchorNode.setAttribute("download", exportName + ".json");
+                document.body.appendChild(downloadAnchorNode); // required for firefox
+                downloadAnchorNode.click();
+                downloadAnchorNode.remove();
             }
 
-            var map = new L.Map("map-container", {center: [51.1078852, 17.0385376], zoom: 12})
-                .addLayer(new L.TileLayer("https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png"));
+            var edges = null;
+            var nodes = null;
 
+            var edges_data = null;
+            var nodes_data = null;
+            var initialized = false;
+            var draw_function = null;
 
-            // Add an SVG element to Leaflet’s overlay pane
-            var svg = d3.select(map.getPanes().overlayPane).append("svg"),
-            g = svg.append("g").attr("class", "leaflet-zoom-hide");
+            let transition = d3.transition()
+                .duration(100)
+                .ease(d3.easeLinear);
 
-            d3.csv("./dane/stations_names.csv", function(error, station_names) {
-                if (error) throw error;
-                
-                let x_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat, d.lng)).x
-                let y_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat, d.lng)).y
+            let force_layout_functions = {
+                nodes_positions: nodes => nodes.map(node => [
+                    world_map.latLngToLayerPoint(new L.LatLng(node.force_x, node.force_y)).x,
+                    world_map.latLngToLayerPoint(new L.LatLng(node.force_x, node.force_y)).x
+                ]),
+                update_view: () => {
+                    $(".leaflet-tile-pane").css({opacity: 0.0})
+                    let geo_proj = node => world_map.latLngToLayerPoint(new L.LatLng(node.force_x, node.force_y))
 
-                var nodes = g.selectAll("circle")
-                    .data(station_names)
-                    .enter().append("circle")
-                    .style("fill", "#95DACF")
-                    .attr("cx", x_func)
-                    .attr("cy", y_func)
-                    .attr("r", 2);
-
-                d3.csv("./dane/edges.csv", function(error, edge_with_weights) {
-                    //edge_with_weights = edge_with_weights.filter(x => x.weight > 10)
-
-                    console.log(edge_with_weights)
-
-                    let x1_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat_source, d.lng_source)).x
-                    let y1_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat_source, d.lng_source)).y    
-                    let x2_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat_target, d.lng_target)).x
-                    let y2_func = d => map.latLngToLayerPoint(new L.LatLng(d.lat_target, d.lng_target)).y    
-
-                    var edges = g.selectAll("line")
-                        .data(edge_with_weights)
-                        .enter().append("line")
+                    nodes
+                        .style("fill", d => "#95DACF" + Math.floor(254*d.betweenness/400 + 1).toString(16).padStart(2, "0"))
+                        .attr("cx", d => geo_proj(d).x)
+                        .attr("cy", d => geo_proj(d).y)
+                        .attr("r", d => d.degree / 80)    
+    
+                    edges
                         .style("stroke-width",d => 0.3*Math.log(d.weight))
-                        .style("stroke", d => "#E82127" + Math.floor(255*d.weight/1978 + 1).toString(16).padStart(2, "0"))
+                        .style("stroke", d => "#10BAEC" + Math.floor(254*d.weight/1978 + 1).toString(16).padStart(2, "0"))
+                        .attr("x1", d => geo_proj(d.source_node).x)
+                        .attr("y1", d => geo_proj(d.source_node).y)
+                        .attr("x2", d => geo_proj(d.target_node).x)
+                        .attr("y2", d => geo_proj(d.target_node).y)
+                }
+            }
+
+            let map_layout_functions = {
+                nodes_positions: nodes => nodes.map(node => {
+                    return [
+                        world_map.latLngToLayerPoint(new L.LatLng(node.lat, node.lng)).x,
+                        world_map.latLngToLayerPoint(new L.LatLng(node.lat, node.lng)).y 
+                    ]
+                }),
+                update_view: () => {
+                    $(".leaflet-tile-pane").css({opacity: 1.0})
+
+                    let x_func = d => world_map.latLngToLayerPoint(new L.LatLng(d.lat, d.lng)).x
+                    let y_func = d => world_map.latLngToLayerPoint(new L.LatLng(d.lat, d.lng)).y    
+                    let x1_func = d => world_map.latLngToLayerPoint(new L.LatLng(d.source_node.lat, d.source_node.lng)).x
+                    let y1_func = d => world_map.latLngToLayerPoint(new L.LatLng(d.source_node.lat, d.source_node.lng)).y    
+                    let x2_func = d => world_map.latLngToLayerPoint(new L.LatLng(d.target_node.lat, d.target_node.lng)).x
+                    let y2_func = d => world_map.latLngToLayerPoint(new L.LatLng(d.target_node.lat, d.target_node.lng)).y    
+    
+                    edges
+                        .style("stroke-width",d => 0.3*Math.log(d.weight))
+                        .style("stroke", d => "#E82127" + Math.floor(254*d.weight/1978 + 1).toString(16).padStart(2, "0"))
                         .attr("x1", x1_func)
                         .attr("y1", y1_func)
                         .attr("x2", x2_func)
                         .attr("y2", y2_func);
+    
+                    nodes
+                        .style("fill", d => "#95DACF" + Math.floor(254*d.betweenness/400 + 1).toString(16).padStart(2, "0"))
+                        .attr("cx", x_func)
+                        .attr("cy", y_func)
+                        .attr("r", d => d.degree / 80);
+                }
+            }
 
-                    map.on("viewreset", reset);
-                    reset();
-    
-                    // Reposition the SVG to cover the features.
-                    function reset() {
-                        svg .attr("width", "100vw")
-                            .attr("height", "100vh")
-                            .style("left", 0 + "px")
-                            .style("top", 0 + "px");
-    
-                        //g   .attr("transform", "translate(" + -topLeft[0] + "," + -topLeft[1] + ")");
-    
-                        nodes.attr("cx", x_func).attr("cy", y_func);
-                        edges.attr("x1", x1_func)
-                            .attr("y1", y1_func)
-                            .attr("x2", x2_func)
-                            .attr("y2", y2_func);
+            var functions = force_layout_functions
+
+            // Initialize map
+            var world_map = new L.Map("map-container", {center: [51.1078852, 17.0385376], zoom: 12})
+                .addLayer(new L.TileLayer("https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png"));
+
+            // Add an SVG element to Leaflet’s overlay pane
+            var svg = d3.select(world_map.getPanes().overlayPane).append("svg"),
+            g = svg.append("g").attr("class", "leaflet-zoom-hide");
+
+            d3.csv("./dane/nodes.csv", function(error, station_names) {                
+                d3.csv("./dane/edge_with_weights.csv", function(error, edge_with_weights) {
+                    // join nodes table to edges
+                    for (edge of edge_with_weights) {
+                        edge['source_node'] = station_names.find(d => (d.id == edge.source)) 
+                        edge['target_node'] = station_names.find(d => (d.id == edge.target)) 
                     }
-    
+
+                    nodes_data = station_names;
+                    edges_data = edge_with_weights;
+                    initialized = true;
+
+                    // Create all edges and nodes
+                    edges = g.selectAll("line")
+                        .data(edges_data)
+                        .enter().append("line")
+
+                    nodes = g.selectAll("circle")
+                        .data(nodes_data)
+                        .enter().append("circle")
+
+                    world_map.on("zoomend", reset_view);
+                    reset_view()              
                 });
+            });
+
+            function reset_view(func_x, func_y) {
+                min_x = Infinity
+                min_y = Infinity
+                max_x = 0
+                max_y = 0
+
+                positions = functions.nodes_positions(nodes_data)
+
+                for (position of positions) {
+                    x = position[0]
+                    y = position[1]
+
+                    min_x = Math.min(x, min_x)
+                    min_y = Math.min(y, min_y)
+
+                    max_x = Math.max(x, max_x)
+                    max_y = Math.max(y, max_y)
+                }
+
+                svg .attr("width", (max_x - min_x))
+                    .attr("height", (max_y - min_y))
+                    .style("left", min_x)
+                    .style("top", min_y);
+
+                g.attr("transform", "translate(" + -min_x + "," + -min_y + ")");
+
+                functions.update_view()
+            }
+        </script>
+        <script>
+            $(document).ready(function(){
+                $('.fixed-action-btn').floatingActionButton();
+            });
+
+            $("#button-map").on("click", () => {
+                functions = map_layout_functions
+                functions.update_view()
+            });
+            $("#button-force").on("click", () => {
+                functions = force_layout_functions
+                functions.update_view()
             });
         </script>
     </body>
